@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Telegram Style Call</title>
+    <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --tg-dark: #000000;
+            --tg-blue: #3390ec;
+            --tg-red: #ff3b30;
+            --tg-gray: #8e8e93;
+            --tg-glass: rgba(28, 28, 29, 0.75);
+            --text-light: #ffffff;
+            --text-dark: #000000;
+        }
+
+        /* Полный запрет скролла на уровне ОС и браузера */
+        html, body {
+            margin: 0; padding: 0; width: 100vw; height: 100vh; height: 100dvh;
+            background-color: var(--tg-dark);
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: var(--text-light);
+            position: fixed; overflow: hidden; touch-action: none; overscroll-behavior: none;
+            -webkit-user-select: none; user-select: none;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; }
+
+        .app-container {
+            width: 100%; height: 100%; position: absolute; top: 0; left: 0;
+            display: flex; flex-direction: column; z-index: 20;
+            background: #ffffff; color: var(--text-dark); transition: background 0.3s;
+        }
+        .app-container.video-active { background: transparent; color: var(--text-light); pointer-events: none; }
+        .app-container.video-active > * { pointer-events: auto; } /* Возвращаем клики элементам */
+
+        /* Слои Видео */
+        #video-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10;
+            display: none; background: #000; overflow: hidden;
+        }
+        
+        #main-video {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover; background: #111; z-index: 1;
+        }
+        
+        /* Плавающее окно (PiP) */
+        #pip-container {
+            position: absolute; top: env(safe-area-inset-top, 60px); right: 20px;
+            width: 110px; height: 160px; z-index: 100; border-radius: 12px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.2);
+            overflow: hidden; background: #222; cursor: grab; touch-action: none;
+            transition: transform 0.1s ease-out;
+        }
+        #pip-container:active { cursor: grabbing; transform: scale(0.95); }
+        
+        #pip-video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+
+        /* Верхняя панель в звонке */
+        .top-bar {
+            position: absolute; top: env(safe-area-inset-top, 20px); left: 0; width: 100%;
+            padding: 0 20px; display: flex; justify-content: space-between; align-items: center;
+            z-index: 110; display: none;
+        }
+        .top-btn {
+            background: rgba(0,0,0,0.4); backdrop-filter: blur(10px); border: none;
+            border-radius: 50%; width: 44px; height: 44px; display: flex; justify-content: center;
+            align-items: center; color: white; cursor: pointer;
+        }
+        .top-btn svg { width: 24px; height: 24px; fill: currentColor; }
+
+        /* Стартовый экран */
+        #start-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #ffffff; z-index: 300; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; padding: 20px; text-align: center;
+        }
+        
+        .main-icon { width: 80px; height: 80px; background: var(--tg-blue); border-radius: 22px; display: flex; justify-content: center; align-items: center; margin-bottom: 20px; color: white; box-shadow: 0 10px 25px rgba(51, 144, 236, 0.4); }
+        .main-icon svg { width: 45px; height: 45px; fill: currentColor; }
+
+        #start-app-btn {
+            padding: 18px 40px; background-color: var(--tg-blue); color: white; border: none;
+            border-radius: 30px; font-size: 18px; font-weight: 600; cursor: pointer;
+            width: 100%; max-width: 300px; transition: transform 0.1s;
+        }
+        #start-app-btn:active { transform: scale(0.95); }
+
+        .call-info-panel { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+        .video-active .call-info-panel { display: none; }
+        #call-status-large { font-size: 26px; font-weight: 600; margin-bottom: 8px; }
+        #call-duration { color: var(--text-light); font-size: 18px; text-shadow: 0 1px 3px rgba(0,0,0,0.5); font-weight: 500; }
+
+        #host-panel { display: none; flex-direction: column; align-items: center; width: 100%; margin-top: 20px; }
+        #share-link-input { width: 100%; max-width: 320px; padding: 16px; background: #f2f2f7; border: none; border-radius: 14px; margin-bottom: 15px; text-align: center; font-size: 15px; color: var(--tg-blue); }
+        #copy-link-btn { width: 100%; max-width: 320px; padding: 16px; background-color: #f2f2f7; color: var(--tg-blue); border: none; border-radius: 14px; font-size: 16px; font-weight: 600; cursor: pointer; }
+
+        /* Панель управления звонком */
+        .controls-wrapper {
+            position: absolute; bottom: 0; left: 0; width: 100%;
+            padding: 20px 10px calc(20px + env(safe-area-inset-bottom));
+            z-index: 100; display: none;
+            background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 100%);
+        }
+
+        .controls {
+            display: flex; justify-content: space-between; align-items: center;
+            max-width: 360px; margin: 0 auto; background: var(--tg-glass);
+            backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
+            border-radius: 30px; padding: 12px 25px; box-shadow: 0 4px 30px rgba(0,0,0,0.4);
+        }
+
+        .control-button { background: none; border: none; padding: 0; color: white; display: flex; flex-direction: column; align-items: center; cursor: pointer; transition: color 0.2s; }
+        .control-button svg { width: 30px; height: 30px; fill: currentColor; margin-bottom: 4px; }
+        .control-button span { font-size: 11px; font-weight: 500; }
+        .control-button.off { color: var(--tg-gray); }
+
+        #end-call-btn { background: var(--tg-red); border-radius: 50%; width: 54px; height: 54px; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 15px rgba(255, 59, 48, 0.4); }
+        #end-call-btn svg { margin: 0; width: 26px; height: 26px; }
+
+        /* Чат (Шторка). Полностью скрыт, пока не вызван */
+        #chat-overlay {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 85vh; height: 85dvh;
+            background: #ffffff; z-index: 200; border-top-left-radius: 24px; border-top-right-radius: 24px;
+            display: flex; flex-direction: column; color: var(--text-dark);
+            transform: translateY(100%); visibility: hidden; pointer-events: none;
+            transition: transform 0.35s cubic-bezier(0.25, 1, 0.5, 1), visibility 0.35s;
+            box-shadow: 0 -10px 40px rgba(0,0,0,0.3);
+        }
+        #chat-overlay.open { transform: translateY(0); visibility: visible; pointer-events: auto; }
+
+        .chat-header { padding: 18px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eaeaea; font-weight: 600; font-size: 18px; }
+        .close-chat { background: #f2f2f7; color: var(--text-dark); border: none; border-radius: 16px; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+
+        #chat-messages { flex-grow: 1; padding: 20px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 12px; background: #e5e5ea; overscroll-behavior: contain; }
+        
+        .msg { padding: 10px 16px; border-radius: 18px; max-width: 80%; font-size: 16px; line-height: 1.4; word-wrap: break-word; }
+        .msg.mine { background: var(--tg-blue); color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+        .msg.theirs { background: white; color: black; align-self: flex-start; border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+
+        .chat-input-area { padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); background: white; display: flex; align-items: center; gap: 12px; border-top: 1px solid #eaeaea; }
+        #chat-input { flex-grow: 1; padding: 14px 20px; border: none; border-radius: 24px; font-size: 16px; outline: none; background: #f2f2f7; }
+        #send-btn { background: var(--tg-blue); color: white; border: none; border-radius: 50%; min-width: 46px; height: 46px; display: flex; justify-content: center; align-items: center; cursor: pointer; }
+        #send-btn svg { width: 22px; height: 22px; fill: currentColor; transform: translateX(1px); }
+
+        .chat-badge { position: absolute; top: 8px; right: 15px; background: var(--tg-red); width: 12px; height: 12px; border-radius: 50%; display: none; border: 2px solid var(--tg-glass); }
+        .has-new-msg .chat-badge { display: block; }
+
+        /* Настройки / Self-Test */
+        .settings-btn { position: absolute; top: env(safe-area-inset-top, 20px); right: 20px; background: none; border: none; color: var(--tg-blue); padding: 10px; z-index: 301; cursor: pointer; }
+        .settings-btn svg { width: 28px; height: 28px; fill: currentColor; }
+        
+        #settings-modal {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); z-index: 400;
+            display: none; justify-content: center; align-items: center; opacity: 0; transition: opacity 0.3s;
+        }
+        .settings-content { background: white; width: 85%; max-width: 320px; border-radius: 24px; padding: 25px; text-align: center; color: black; box-shadow: 0 15px 40px rgba(0,0,0,0.2); transform: scale(0.9); transition: transform 0.3s; }
+        #settings-modal.show { display: flex; opacity: 1; }
+        #settings-modal.show .settings-content { transform: scale(1); }
+        .settings-content h3 { margin: 0 0 20px; font-size: 20px; }
+        .btn-test { background: #34c759; color: white; border: none; padding: 14px; width: 100%; border-radius: 14px; font-size: 16px; font-weight: 600; margin-bottom: 10px; cursor: pointer; }
+        .btn-close-settings { background: #f2f2f7; color: black; border: none; padding: 14px; width: 100%; border-radius: 14px; font-size: 16px; font-weight: 600; cursor: pointer; }
+
+    </style>
+</head>
+<body>
+
+    <audio id="remote-audio" autoplay></audio>
+
+    <div id="video-layer">
+        <video id="main-video" autoplay playsinline muted></video>
+        <div id="pip-container">
+            <video id="pip-video" autoplay playsinline muted></video>
+        </div>
+        
+        <div class="top-bar" id="top-bar">
+            <div style="width: 44px;"></div>
+            <div id="call-duration">00:00</div>
+            <button class="top-btn" id="flip-camera-btn">
+                <svg viewBox="0 0 24 24"><path d="M20 4h-3.17L15 2H9L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-5 11.5V13H9v2.5L5.5 12 9 8.5V11h6V8.5l3.5 3.5-3.5 3.5z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <div class="app-container" id="app-container">
+        
+        <button class="settings-btn" id="open-settings-btn">
+            <svg viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.06-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.73,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.06,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.43-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.49-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+        </button>
+
+        <div id="start-screen">
+            <div class="main-icon">
+                <svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4zM14 13h-3v3H9v-3H6v-2h3V8h2v3h3v2z"/></svg>
+            </div>
+            <h2 style="font-size: 28px; margin: 0 0 10px;">Видеозвонок</h2>
+            <p style="color: var(--tg-gray); margin-bottom: 30px; padding: 0 20px;">Надежно и зашифровано (P2P)</p>
+            <button id="start-app-btn">Начать</button>
+        </div>
+
+        <div class="call-info-panel">
+            <div id="call-status-large">Ожидание...</div>
+            <div id="host-panel">
+                <p style="color: var(--tg-gray); margin-bottom: 12px; font-weight: 500;">Отправьте эту ссылку собеседнику:</p>
+                <input type="text" id="share-link-input" readonly>
+                <button id="copy-link-btn">Скопировать ссылку</button>
+            </div>
+        </div>
+
+        <div class="controls-wrapper" id="controls-wrapper">
+            <div class="controls">
+                <button class="control-button" id="video-btn">
+                    <svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+                    <span>Камера</span>
+                </button>
+                <button class="control-button" id="mute-btn">
+                    <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5z"/></svg>
+                    <span>Микрофон</span>
+                </button>
+                <button class="control-button" id="chat-btn" style="position: relative;">
+                    <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+                    <span>Чат</span>
+                    <div class="chat-badge"></div>
+                </button>
+                <button class="control-button" id="end-call-btn">
+                    <svg viewBox="0 0 24 24" fill="white"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal">
+        <div class="settings-content">
+            <h3>Настройки</h3>
+            <button class="btn-test" id="test-call-btn">Проверить камеру (Loopback)</button>
+            <button class="btn-close-settings" id="close-settings-btn">Закрыть</button>
+        </div>
+    </div>
+
+    <div id="chat-overlay">
+        <div class="chat-header">
+            <span>Сообщения</span>
+            <button class="close-chat" id="close-chat-btn">Скрыть</button>
+        </div>
+        <div id="chat-messages"></div>
+        <div class="chat-input-area">
+            <input type="text" id="chat-input" placeholder="Введите сообщение...">
+            <button id="send-btn">
+                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    
+    <script>
+        const els = {
+            appCont: document.getElementById('app-container'),
+            videoLayer: document.getElementById('video-layer'),
+            startScreen: document.getElementById('start-screen'),
+            startAppBtn: document.getElementById('start-app-btn'),
+            statusLarge: document.getElementById('call-status-large'),
+            duration: document.getElementById('call-duration'),
+            hostPanel: document.getElementById('host-panel'),
+            shareInput: document.getElementById('share-link-input'),
+            controlsWrap: document.getElementById('controls-wrapper'),
+            muteBtn: document.getElementById('mute-btn'),
+            videoBtn: document.getElementById('video-btn'),
+            chatBtn: document.getElementById('chat-btn'),
+            endCallBtn: document.getElementById('end-call-btn'),
+            mainVideo: document.getElementById('main-video'),
+            pipContainer: document.getElementById('pip-container'),
+            pipVideo: document.getElementById('pip-video'),
+            remoteAudio: document.getElementById('remote-audio'),
+            topBar: document.getElementById('top-bar'),
+            flipCamBtn: document.getElementById('flip-camera-btn'),
+            chatOverlay: document.getElementById('chat-overlay'),
+            chatMsgs: document.getElementById('chat-messages'),
+            chatInput: document.getElementById('chat-input'),
+            sendBtn: document.getElementById('send-btn'),
+            closeChatBtn: document.getElementById('close-chat-btn'),
+            settingsBtn: document.getElementById('open-settings-btn'),
+            settingsModal: document.getElementById('settings-modal'),
+            testCallBtn: document.getElementById('test-call-btn'),
+            closeSettingsBtn: document.getElementById('close-settings-btn')
+        };
+
+        let localStream, remoteStream;
+        let currentPeer, currentMediaCall, currentDataConn;
+        let callStartTime, durationInterval;
+        let isMuted = false, isVideoOff = false;
+        let currentFacingMode = 'user'; // 'user' или 'environment'
+        let localOnMain = false; // Состояние: кто на главном экране
+        let isTestMode = false;
+
+        const targetId = new URLSearchParams(window.location.search).get('call');
+        if (targetId) els.startAppBtn.innerText = "Присоединиться";
+
+        // --- ИНИЦИАЛИЗАЦИЯ И МЕДИА ---
+        async function getMedia(facingMode = 'user') {
+            try {
+                return await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: facingMode }, 
+                    audio: true 
+                });
+            } catch (err) {
+                console.warn("Ошибка видео, пробуем только аудио");
+                return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            }
+        }
+
+        els.startAppBtn.addEventListener('click', async () => {
+            els.startScreen.style.display = 'none';
+            els.settingsBtn.style.display = 'none';
+            els.statusLarge.innerText = "Доступ к камере...";
+            
+            try {
+                localStream = await getMedia(currentFacingMode);
+                updateVideoSources(); // Устанавливаем потоки в плееры
+                
+                els.statusLarge.innerText = "Связь с сервером...";
+                initPeer();
+            } catch (err) {
+                els.statusLarge.innerText = "Ошибка доступа";
+                alert("Разрешите использование камеры и микрофона.");
+                els.startScreen.style.display = 'flex';
+                els.settingsBtn.style.display = 'block';
+            }
+        });
+
+        function initPeer() {
+            currentPeer = new Peer();
+            
+            currentPeer.on('open', myId => {
+                if (targetId) {
+                    els.statusLarge.innerText = "Соединение...";
+                    const call = currentPeer.call(targetId, localStream);
+                    handleMediaCall(call);
+                    
+                    const conn = currentPeer.connect(targetId);
+                    setupDataConn(conn);
+                } else {
+                    els.statusLarge.innerText = "Готово";
+                    els.shareInput.value = `${window.location.origin}${window.location.pathname}?call=${myId}`;
+                    els.hostPanel.style.display = 'flex';
+                }
+            });
+
+            currentPeer.on('call', call => {
+                call.answer(localStream);
+                handleMediaCall(call);
+                els.hostPanel.style.display = 'none';
+            });
+
+            currentPeer.on('connection', conn => {
+                setupDataConn(conn);
+            });
+        }
+
+        // --- ОБРАБОТКА ЗВОНКА И ВИДЕО ---
+        function handleMediaCall(call) {
+            currentMediaCall = call;
+            
+            callStartTime = Date.now();
+            durationInterval = setInterval(updateDuration, 1000);
+
+            call.on('stream', stream => {
+                // Защита от багов PeerJS (двойное срабатывание)
+                if (remoteStream !== stream) {
+                    remoteStream = stream;
+                    els.remoteAudio.srcObject = stream; // ЗВУК ИДЕТ ТОЛЬКО ОТСЮДА!
+                    
+                    activateVideoUI();
+                    updateVideoSources();
+                }
+            });
+
+            call.on('close', endCallUI);
+        }
+
+        function activateVideoUI() {
+            els.appCont.classList.add('video-active');
+            els.videoLayer.style.display = 'block';
+            els.controlsWrap.style.display = 'block';
+            els.topBar.style.display = 'flex';
+            
+            // Запускаем видео
+            els.mainVideo.play().catch(e=>{});
+            els.pipVideo.play().catch(e=>{});
+        }
+
+        // Логика распределения потоков (Главный экран / PiP)
+        function updateVideoSources() {
+            // Оба видео тега ВСЕГДА muted, чтобы избежать проблем с мобильным автоплеем.
+            // Удаленный звук играет через скрытый <audio id="remote-audio">
+            
+            if (isTestMode) {
+                els.mainVideo.srcObject = localStream;
+                els.pipVideo.srcObject = null;
+                els.pipContainer.style.display = 'none';
+                return;
+            }
+
+            els.pipContainer.style.display = 'block';
+
+            if (localOnMain) {
+                els.mainVideo.srcObject = localStream;
+                els.pipVideo.srcObject = remoteStream || localStream;
+            } else {
+                els.mainVideo.srcObject = remoteStream || null;
+                els.pipVideo.srcObject = localStream;
+            }
+        }
+
+        // --- СМЕНА КАМЕРЫ (Фронталка / Основная) ---
+        els.flipCamBtn.addEventListener('click', async () => {
+            if (!localStream) return;
+            currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+            
+            try {
+                const newStream = await getMedia(currentFacingMode);
+                const newVideoTrack = newStream.getVideoTracks()[0];
+                
+                // Заменяем трек в локальном потоке
+                localStream.removeTrack(localStream.getVideoTracks()[0]);
+                localStream.addTrack(newVideoTrack);
+                
+                // Если мы в звонке - отправляем новый трек собеседнику "на лету"
+                if (currentMediaCall) {
+                    const sender = currentMediaCall.peerConnection.getSenders().find(s => s.track.kind === 'video');
+                    if (sender) sender.replaceTrack(newVideoTrack);
+                }
+                
+                // Применяем настройки мута к новому потоку
+                newVideoTrack.enabled = !isVideoOff;
+                localStream.getAudioTracks()[0].enabled = !isMuted;
+                
+            } catch (e) {
+                console.error("Ошибка переключения камеры", e);
+            }
+        });
+
+        // --- УПРАВЛЕНИЕ PIP (Перетаскивание и Клик для смены) ---
+        let isDragging = false;
+        let startX, startY, initialLeft, initialTop;
+        let dragStartTime;
+
+        function startDrag(e) {
+            dragStartTime = Date.now();
+            isDragging = true;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            const rect = els.pipContainer.getBoundingClientRect();
+            initialLeft = rect.left;
+            initialTop = rect.top;
+            
+            startX = clientX;
+            startY = clientY;
+            
+            els.pipContainer.style.right = 'auto'; // Отключаем right, переходим на left/top
+            els.pipContainer.style.transition = 'none'; // Убираем анимацию при драге
+        }
+
+        function drag(e) {
+            if (!isDragging) return;
+            e.preventDefault(); // Останавливаем любые браузерные скроллы
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            
+            let newLeft = initialLeft + (clientX - startX);
+            let newTop = initialTop + (clientY - startY);
+            
+            // Ограничиваем экраном
+            const maxX = window.innerWidth - els.pipContainer.offsetWidth;
+            const maxY = window.innerHeight - els.pipContainer.offsetHeight;
+            newLeft = Math.max(0, Math.min(newLeft, maxX));
+            newTop = Math.max(0, Math.min(newTop, maxY));
+            
+            els.pipContainer.style.left = `${newLeft}px`;
+            els.pipContainer.style.top = `${newTop}px`;
+        }
+
+        function stopDrag(e) {
+            if (!isDragging) return;
+            isDragging = false;
+            els.pipContainer.style.transition = 'transform 0.1s ease-out';
+            
+            // Определяем, был ли это клик (быстрое отпускание без сильного сдвига)
+            const duration = Date.now() - dragStartTime;
+            if (duration < 200 && remoteStream) { 
+                localOnMain = !localOnMain;
+                updateVideoSources();
+            }
+        }
+
+        els.pipContainer.addEventListener('touchstart', startDrag, {passive: false});
+        document.addEventListener('touchmove', drag, {passive: false});
+        document.addEventListener('touchend', stopDrag);
+        
+        els.pipContainer.addEventListener('mousedown', startDrag);
+        document.addEventListener('mousemove', drag);
+        document.addEventListener('mouseup', stopDrag);
+
+
+        // --- ЧАТ (ЛОГИКА И UI) ---
+        function setupDataConn(conn) {
+            conn.on('open', () => { currentDataConn = conn; });
+            conn.on('data', data => {
+                if(data.type === 'chat') addMsg(data.msg, false);
+            });
+        }
+
+        els.chatBtn.addEventListener('click', () => {
+            els.chatOverlay.classList.add('open');
+            els.chatBtn.classList.remove('has-new-msg');
+        });
+        
+        els.closeChatBtn.addEventListener('click', () => els.chatOverlay.classList.remove('open'));
+
+        function sendMsg() {
+            const txt = els.chatInput.value.trim();
+            if(!txt || !currentDataConn) return;
+            currentDataConn.send({ type: 'chat', msg: txt });
+            addMsg(txt, true);
+            els.chatInput.value = '';
+        }
+
+        els.sendBtn.addEventListener('click', sendMsg);
+        els.chatInput.addEventListener('keypress', e => { if(e.key === 'Enter') sendMsg(); });
+
+        function addMsg(txt, isMine) {
+            const div = document.createElement('div');
+            div.className = `msg ${isMine ? 'mine' : 'theirs'}`;
+            div.innerText = txt;
+            els.chatMsgs.appendChild(div);
+            els.chatMsgs.scrollTop = els.chatMsgs.scrollHeight;
+            
+            if(!isMine && !els.chatOverlay.classList.contains('open')) {
+                els.chatBtn.classList.add('has-new-msg');
+            }
+        }
+
+        // --- КНОПКИ УПРАВЛЕНИЯ ---
+        els.muteBtn.addEventListener('click', () => {
+            isMuted = !isMuted;
+            if(localStream) localStream.getAudioTracks()[0].enabled = !isMuted;
+            els.muteBtn.classList.toggle('off', isMuted);
+        });
+
+        els.videoBtn.addEventListener('click', () => {
+            isVideoOff = !isVideoOff;
+            if(localStream) localStream.getVideoTracks()[0].enabled = !isVideoOff;
+            els.videoBtn.classList.toggle('off', isVideoOff);
+        });
+
+        els.endCallBtn.addEventListener('click', () => {
+            if (currentMediaCall) currentMediaCall.close();
+            if (currentDataConn) currentDataConn.close();
+            if (currentPeer) currentPeer.destroy();
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            endCallUI();
+        });
+
+        function updateDuration() {
+            const d = Date.now() - callStartTime;
+            const m = Math.floor(d / 60000).toString().padStart(2, '0');
+            const s = Math.floor((d % 60000) / 1000).toString().padStart(2, '0');
+            els.duration.innerText = `${m}:${s}`;
+        }
+
+        function endCallUI() {
+            clearInterval(durationInterval);
+            window.location.href = window.location.pathname; // Полная перезагрузка для сброса
+        }
+
+        document.getElementById('copy-link-btn').addEventListener('click', () => {
+            els.shareInput.select();
+            navigator.clipboard.writeText(els.shareInput.value).then(() => alert("Ссылка скопирована!"));
+        });
+
+        // --- НАСТРОЙКИ / ПРОВЕРКА СВЯЗИ ---
+        els.settingsBtn.addEventListener('click', () => {
+            els.settingsModal.classList.add('show');
+        });
+        
+        els.closeSettingsBtn.addEventListener('click', () => {
+            els.settingsModal.classList.remove('show');
+            if (isTestMode) endCallUI();
+        });
+
+        els.testCallBtn.addEventListener('click', async () => {
+            els.settingsModal.classList.remove('show');
+            els.startScreen.style.display = 'none';
+            els.settingsBtn.style.display = 'none';
+            isTestMode = true;
+            
+            localStream = await getMedia();
+            activateVideoUI();
+            updateVideoSources();
+            
+            els.duration.innerText = "Режим проверки";
+            els.topBar.style.justifyContent = "center";
+            els.flipCamBtn.style.display = 'none'; // Отключаем в тесте
+        });
+
+    </script>
+</body>
+</html>
